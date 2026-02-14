@@ -1,0 +1,21 @@
+model_list:
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/AGENTX_GEMINI_API_KEY
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/AGENTX_GEMINI_API_KEY
+  - model_name: gemini-embedding-001
+    litellm_params:
+      model: gemini/gemini-embedding-001
+      api_key: os.environ/AGENTX_GEMINI_API_KEY
+
+litellm_settings:
+  modify_params: True
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"] 
+  drop_params: True
+  telemetry: False
+  set_verbose: True

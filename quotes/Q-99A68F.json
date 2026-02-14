@@ -1,0 +1,15 @@
+{
+  "quote_id": "Q-99A68F",
+  "customer": "Test Direct Corp",
+  "items": [
+    {
+      "name": "Office Chair",
+      "qty": 5,
+      "unit_price": 1500,
+      "total": 7500
+    }
+  ],
+  "subtotal": 7500,
+  "total": 7500,
+  "terms": "Direct test terms"
+}

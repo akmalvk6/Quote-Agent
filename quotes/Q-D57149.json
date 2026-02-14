@@ -1,0 +1,15 @@
+{
+  "quote_id": "Q-D57149",
+  "customer": "Test Corp",
+  "items": [
+    {
+      "name": "Office Chair",
+      "qty": 120,
+      "unit_price": 1500,
+      "total": 153000
+    }
+  ],
+  "subtotal": 180000,
+  "total": 153000,
+  "terms": "Standard T&C apply."
+}

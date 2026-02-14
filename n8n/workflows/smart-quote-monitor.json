@@ -1,0 +1,305 @@
+{
+  "name": "Smart Quote Cron Monitor - No FS Module",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "cadaae98-0cd8-45b3-8feb-0ed337cb5f48",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "53c136fe-3e77-4709-a143-fe82746dd8b6",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {},
+      "id": "84278f1b-3b69-423d-be27-8e2d97d1bf8a",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        352,
+        224
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "370d6776-ea3b-4fe3-b4f6-0ce1df77c28d",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        240,
+        0
+      ],
+      "typeVersion": 1.8
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        112,
+        208
+      ],
+      "id": "02c7d21b-3ccb-43cb-8cd3-42c9046338cc",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "NIyh1arV1YVRpHY4",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        }
+      },
+      "id": "8647a993-89ff-4c3a-96b7-9b9c9c85651f",
+      "name": "Check Every 2 Minutes",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        608,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "00537590-6cbd-4711-b2a4-76303f3d6af8",
+      "name": "Has New Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "akmal2500@gmail.com",
+        "toEmail": "akkk@deloitte.com",
+        "subject": "🎯 New Quote {{ $json.quote_id }} - {{ $json.customer }} ({{ $json.total_formatted }})",
+        "emailFormat": "html",
+        "message": "=<div style=\"font-family: Arial, sans-serif; max-width: 600px;\">\n  <h2 style=\"color: #2c3e50;\">📋 New Quote Generated</h2>\n  \n  <div style=\"background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;\">\n    <h3 style=\"color: #3498db; margin-top: 0;\">Quote Details</h3>\n    <p><strong>Quote ID:</strong> {{ $json.quote_id }}</p>\n    <p><strong>Customer:</strong> {{ $json.customer }}</p>\n    <p><strong>Total Amount:</strong> {{ $json.total_formatted }}</p>\n    <p><strong>Generated:</strong> {{ $json.timestamp }}</p>\n  </div>\n  \n  <div style=\"background: #e8f5e8; padding: 15px; border-radius: 8px; margin: 20px 0;\">\n    <h4 style=\"color: #27ae60; margin-top: 0;\">Items Summary</h4>\n    <p>{{ $json.items_summary }}</p>\n  </div>\n  \n  <div style=\"background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0;\">\n    <h4 style=\"color: #856404; margin-top: 0;\">Terms & Conditions</h4>\n    <p>{{ $json.terms }}</p>\n  </div>\n  \n  <p style=\"font-size: 12px; color: #6c757d;\">File: {{ $json.file_name }}<br>Detection: {{ $json.detection_method }}</p>\n</div>",
+        "options": {
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "e6908650-b7a4-4dbe-a352-bee7beb9edd2",
+      "name": "Send Email Notification",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1936,
+        144
+      ],
+      "webhookId": "ea1f03ab-86f0-4d4a-801b-c966e92845db",
+      "credentials": {
+        "smtp": {
+          "id": "dxwAz5aX2Y4E71BS",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "find /workspaces/agentx-hackathon-DC-Pros -name 'Q-*.json' -type f 2>/dev/null | head -20"
+      },
+      "id": "d72f79b2-27c1-4d71-8be4-896b0e607609",
+      "name": "List Quote Files1",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        832,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process the file list and detect new files using simple tracking\nconst commandOutput = $input.first().json.stdout || '';\n\nconsole.log('Command output:', commandOutput);\n\nif (!commandOutput.trim()) {\n  console.log('No quote files found in entire workspace');\n  return [];\n}\n\n// Parse the find command output (file paths, one per line)\nconst filePaths = commandOutput.trim().split('\\n')\n  .filter(line => line.trim() && line.includes('Q-'))\n  .map(path => path.trim());\n\nconsole.log('All found files:', filePaths);\n\nif (filePaths.length === 0) {\n  console.log('No valid quote files found after filtering');\n  return [];\n}\n\n// Use workflow static data to track processed files\nconst staticData = this.getWorkflowStaticData('global');\nconst processedKey = 'processedQuoteFiles';\n\n// Get previously processed files (default to empty set)\nconst processedFiles = new Set(staticData[processedKey] || []);\nconsole.log('Previously processed files:', Array.from(processedFiles));\n\n// Find new files (not previously processed)\nconst newFiles = filePaths.filter(filePath => !processedFiles.has(filePath));\n\nconsole.log('New files to process:', newFiles);\n\nif (newFiles.length === 0) {\n  console.log('No new files since last check - all files already processed');\n  // For testing, let's process the most recent file anyway if it exists\n  if (filePaths.length > 0) {\n    console.log('For testing: processing most recent file anyway');\n    const mostRecentFile = filePaths[0];\n    return [{\n      path: mostRecentFile,\n      name: mostRecentFile.split('/').pop(),\n      timestamp: new Date().toISOString(),\n      isReprocessed: true\n    }];\n  }\n  return [];\n}\n\n// Update processed files list (keep only last 50 to avoid memory issues)\nconst allProcessed = [...processedFiles, ...newFiles];\nstaticData[processedKey] = allProcessed.slice(-50);\n\n// Return new files for processing\nreturn newFiles.map(filePath => ({\n  path: filePath,\n  name: filePath.split('/').pop(),\n  timestamp: new Date().toISOString(),\n  isReprocessed: false\n}));"
+      },
+      "id": "1e960377-16c0-4aca-bc13-b801e62d847c",
+      "name": "Filter New Files1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "filePath": "={{ $json.path }}"
+      },
+      "id": "215026ef-09e4-4a68-9950-ea773bcf3895",
+      "name": "Read Quote File1",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        1488,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the JSON file content and extract key fields\nconst fileContent = $input.first().json.data;\nconst quoteData = JSON.parse(fileContent);\nconst fileInfo = $('Filter New Files1').first().json;\n\n// Extract key information\nconst result = {\n  customer: quoteData.customer,\n  quote_id: quoteData.quote_id,\n  total: quoteData.total,\n  items: quoteData.items,\n  terms: quoteData.terms,\n  // Format total as currency\n  total_formatted: `$${Number(quoteData.total).toLocaleString()}`,\n  // Create summary text\n  items_summary: quoteData.items.map(item => \n    `${item.qty}x ${item.name} @ $${Number(item.unit_price || 0).toLocaleString()}`\n  ).join(', '),\n  file_path: fileInfo.path,\n  file_name: fileInfo.name,\n  timestamp: new Date().toLocaleString(),\n  detection_method: fileInfo.isReprocessed ? 'reprocessed_for_testing' : 'new_file_detected',\n  isReprocessed: fileInfo.isReprocessed || false\n};\n\nconsole.log('Parsed quote data:', result);\nreturn [result];"
+      },
+      "id": "aa0bdc5f-874b-41fe-9c18-90c2c1e0424c",
+      "name": "Parse Quote Data1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        144
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Every 2 Minutes": {
+      "main": [
+        [
+          {
+            "node": "List Quote Files1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has New Files?": {
+      "main": [
+        [
+          {
+            "node": "Read Quote File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Quote Files1": {
+      "main": [
+        [
+          {
+            "node": "Filter New Files1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Files1": {
+      "main": [
+        [
+          {
+            "node": "Has New Files?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Quote File1": {
+      "main": [
+        [
+          {
+            "node": "Parse Quote Data1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Quote Data1": {
+      "main": [
+        [
+          {
+            "node": "Send Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "25e55cd6-2250-455a-bba5-337984615fa2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2db99fc212b69544cc91abe469cdcdd0f74afe2ed0a9fb530c3b4f7eec0b"
+  },
+  "id": "vIkVVuAmjf1AprPX",
+  "tags": []
+}
