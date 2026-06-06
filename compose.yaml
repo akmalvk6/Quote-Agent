@@ -1,5 +1,17 @@
 
 services:
+  postgres:
+    image: postgres:16
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=quote_agent
+      - POSTGRES_USER=quote_agent
+      - POSTGRES_PASSWORD=quote_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   n8n:
     image: docker.n8n.io/n8nio/n8n
     restart: always
@@ -16,3 +28,5 @@ services:
       - ./n8n/n8n_data:/home/node/.n8n
       - ./n8n/local-files:/files
 
+volumes:
+  postgres_data:

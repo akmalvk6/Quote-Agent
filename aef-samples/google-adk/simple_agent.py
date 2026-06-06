@@ -11,6 +11,11 @@ from pathlib import Path
 import pandas as pd
 import openai
 from typing import AsyncGenerator, Any
+from approval_queue import ApprovalQueue
+from guardrails import guardrail_agent as run_guardrail_agent
+from observability import Observability
+from quote_storage import QuoteRepository
+from rag_retriever import HistoricalQuoteRetriever
 from google.adk.agents import LlmAgent
 from google.adk.models import BaseLlm
 from google.adk.runners import Runner, types
@@ -48,6 +53,8 @@ class LLMGatewayModel(BaseLlm):
                     "price_lookup": globals()["price_lookup"],
                     "discount_calculator": globals()["discount_calculator"],
                     "historical_match": globals()["historical_match"],
+                    "customer_memory": globals()["customer_memory"],
+                    "guardrail_agent": globals()["guardrail_agent"],
                     "quote_generator": globals()["quote_generator"]
                 }
                 print(f"🔧 [DEBUG] Tools map initialized with: {list(self._tools_map.keys())}")
@@ -250,10 +257,13 @@ class LLMGatewayModel(BaseLlm):
             yield ErrorResponse(f"Error: {str(e)}")
 
 DATA_DIR   = Path("data")
-# Ensure n8n can find the files - use the exact path n8n monitors
-OUT_DIR    = Path("/workspaces/agentx-hackathon-DC-Pros/n8n/local-files/quotes")
+# Approved quotes are written here for downstream sending/monitoring.
+OUT_DIR    = Path(os.getenv("QUOTES_OUT_DIR", "quotes"))
+APPROVAL_DIR = Path(os.getenv("APPROVAL_QUEUE_DIR", "approval_queue"))
+TELEMETRY_LOG = DATA_DIR / "observability.jsonl"
 DATA_DIR.mkdir(exist_ok=True)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+APPROVAL_DIR.mkdir(parents=True, exist_ok=True)
 
 PRODUCTS_CSV = DATA_DIR / "products.csv"
 HISTORY_CSV  = DATA_DIR / "historical_quotes.csv"
@@ -279,6 +289,12 @@ def ensure_data():
 
 ensure_data()
 
+repository = QuoteRepository(DATA_DIR)
+repository.initialize_postgres()
+approval_queue = ApprovalQueue(APPROVAL_DIR, OUT_DIR)
+historical_retriever = HistoricalQuoteRetriever(HISTORY_CSV, DATA_DIR / "vector_store")
+observability = Observability(TELEMETRY_LOG)
+
 # === Tool functions with proper type annotations ===
 def price_lookup(product_name: str) -> dict:
     """Return product info by fuzzy match.
@@ -289,22 +305,13 @@ def price_lookup(product_name: str) -> dict:
     Returns:
         Dictionary with product information or error message
     """
-    df = pd.read_csv(PRODUCTS_CSV)
-    # Make search more flexible - try partial matches and different variations
-    search_terms = [
-        product_name.lower(),
-        product_name.lower().replace('chairs', 'chair'),
-        product_name.lower().replace('tables', 'table'),
-        product_name.lower().replace('desks', 'desk')
-    ]
-    
-    for term in search_terms:
-        hits = df[df["name"].str.lower().str.contains(term)]
-        if not hits.empty:
-            row = hits.iloc[0].to_dict()
-            return {"found":True, **row}
-    
-    return {"found":False,"message":f"No product matching '{product_name}'. Available products: {', '.join(df['name'].tolist())}"}
+    with observability.span("tool.price_lookup", product_name=product_name):
+        product = repository.find_product(product_name)
+        if product:
+            return {"found": True, **product}
+
+        available = ", ".join(product["name"] for product in repository.list_products())
+        return {"found": False, "message": f"No product matching '{product_name}'. Available products: {available}"}
 
 def discount_calculator(unit_price: float, qty: int, customer_type: str = "regular") -> dict:
     """Calculate tiered discounts.
@@ -317,13 +324,19 @@ def discount_calculator(unit_price: float, qty: int, customer_type: str = "regul
     Returns:
         Dictionary with discount percentage and total price
     """
-    disc = 0.1 if qty>=100 else 0.05 if qty>=50 else 0.0
-    if customer_type=="preferred": disc += 0.05
-    total = unit_price*qty*(1-disc)
-    return {"discount_pct":disc, "total":total}
+    with observability.span("tool.discount_calculator", qty=qty, customer_type=customer_type):
+        disc = 0.15 if qty >= 100 else 0.10 if qty >= 50 else 0.05 if qty >= 20 else 0.0
+        if customer_type == "preferred":
+            disc += 0.05
+        total = unit_price * qty * (1 - disc)
+        return {
+            "discount_pct": disc,
+            "discounted_unit_price": unit_price * (1 - disc),
+            "total": total,
+        }
 
 def historical_match(product_name: str, top_k: int = 2) -> list:
-    """Return top k historical quotes mentioning the product.
+    """Retrieve historical quote chunks using the local vector index.
     
     Args:
         product_name: Name of the product to search for
@@ -332,9 +345,51 @@ def historical_match(product_name: str, top_k: int = 2) -> list:
     Returns:
         List of historical quote records
     """
-    df = pd.read_csv(HISTORY_CSV)
-    hits = df[df["product"].str.lower().str.contains(product_name.lower())]
-    return hits.head(top_k).to_dict(orient="records")
+    with observability.span("tool.historical_match", product_name=product_name, top_k=top_k):
+        return historical_retriever.search(product_name, top_k=top_k)
+
+def customer_memory(customer: str) -> dict:
+    """Return known customer memory including discounts and purchase history.
+
+    Args:
+        customer: Customer name
+
+    Returns:
+        Customer memory record
+    """
+    with observability.span("tool.customer_memory", customer=customer):
+        return repository.get_customer_memory(customer)
+
+def guardrail_agent(
+    request_text: str,
+    items_json: str,
+    discount_pct: float = 0.0,
+    total: float = 0.0,
+) -> dict:
+    """Dedicated Guardrail Agent for quote safety and policy checks.
+
+    Args:
+        request_text: Original user request
+        items_json: JSON string of quote items
+        discount_pct: Maximum discount percentage requested
+        total: Quote total
+
+    Returns:
+        Guardrail validation result
+    """
+    with observability.span("tool.guardrail_agent"):
+        try:
+            items = json.loads(items_json) if items_json else []
+        except json.JSONDecodeError:
+            return {"approved": False, "issues": ["output_schema_invalid_json"], "requires_human_approval": True}
+        known_products = [product["name"] for product in repository.list_products()]
+        return run_guardrail_agent(
+            request_text=request_text,
+            items=items,
+            discount_pct=discount_pct,
+            known_products=known_products,
+            total=total,
+        )
 
 def quote_generator(customer: str, items_json: str, terms: str = "Standard T&C apply.") -> dict:
     """Compose & save quote JSON.
@@ -347,30 +402,47 @@ def quote_generator(customer: str, items_json: str, terms: str = "Standard T&C a
     Returns:
         Dictionary with quote information including quote ID
     """
-    try:
-        items = json.loads(items_json) if items_json else []
-    except json.JSONDecodeError:
-        return {"error": "Invalid items_json format. Expected JSON array string."}
-    
-    qid = f"Q-{uuid.uuid4().hex[:6].upper()}"
-    subtotal = sum(i.get("unit_price", 0) * i.get("qty", 0) for i in items)
-    total = sum(i.get("total", 0) for i in items)
-    quote = {"quote_id": qid, "customer": customer, "items": items,
-             "subtotal": subtotal, "total": total, "terms": terms}
-    
-    with open(OUT_DIR / f"{qid}.json", "w") as f: 
-        json.dump(quote, f, indent=2)
-    
-    with open(LOG_CSV, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["quote_id", "customer", "total"])
-        if f.tell() == 0: 
-            w.writeheader()
-        w.writerow({"quote_id": qid, "customer": customer, "total": total})
-    
-    return quote
+    with observability.span("tool.quote_generator", customer=customer):
+        try:
+            items = json.loads(items_json) if items_json else []
+        except json.JSONDecodeError:
+            return {"error": "Invalid items_json format. Expected JSON array string."}
+
+        qid = f"Q-{uuid.uuid4().hex[:6].upper()}"
+        subtotal = sum(i.get("unit_price", 0) * i.get("qty", 0) for i in items)
+        total = sum(i.get("total", 0) for i in items)
+        max_discount = max((i.get("discount_pct", 0) for i in items), default=0)
+        known_products = [product["name"] for product in repository.list_products()]
+        validation = run_guardrail_agent(
+            request_text=f"Quote for {customer}",
+            items=items,
+            discount_pct=max_discount,
+            known_products=known_products,
+            total=total,
+        )
+        quote = {
+            "quote_id": qid,
+            "customer": customer,
+            "items": items,
+            "subtotal": subtotal,
+            "total": total,
+            "terms": terms,
+            "guardrails": validation,
+        }
+
+        pending_quote = approval_queue.submit(quote)
+
+        with open(LOG_CSV, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=["quote_id", "customer", "total", "status"])
+            if f.tell() == 0:
+                w.writeheader()
+            w.writerow({"quote_id": qid, "customer": customer, "total": total, "status": "pending_approval"})
+
+        repository.update_customer_memory(customer, pending_quote)
+        return pending_quote
 
 # === Google ADK Agent Setup ===
-tools = [price_lookup, discount_calculator, historical_match, quote_generator]
+tools = [price_lookup, discount_calculator, historical_match, customer_memory, guardrail_agent, quote_generator]
 
 smart_agent = LlmAgent(
     model=LLMGatewayModel(model_name=MODEL_NAME),
@@ -381,14 +453,19 @@ You are a Smart Quoting Agent. You have these exact tools available:
 - price_lookup(product_name: str) -> dict
 - discount_calculator(unit_price: float, qty: int, customer_type: str = "regular") -> dict  
 - historical_match(product_name: str, top_k: int = 2) -> list
+- customer_memory(customer: str) -> dict
+- guardrail_agent(request_text: str, items_json: str, discount_pct: float, total: float) -> dict
 - quote_generator(customer: str, items_json: str, terms: str = "Standard T&C apply.") -> dict
 
 FOR ANY QUOTE REQUEST:
-Step 1: Call price_lookup("product name") to get pricing
-Step 2: Call discount_calculator(price, quantity, "regular" or "preferred") 
-Step 3: Call quote_generator(customer_name, '[{"name":"product","qty":N,"unit_price":P,"total":T}]')
+Step 1: Call customer_memory(customer_name) to check customer context
+Step 2: Call historical_match("customer product quantity") to retrieve similar quote history
+Step 3: Call price_lookup("product name") to get pricing
+Step 4: Call discount_calculator(price, quantity, "regular" or "preferred")
+Step 5: Call guardrail_agent(request_text, items_json, discount_pct, total) to check prompt injection, quantities, product validity, discount limits, thresholds, and schema
+Step 6: Call quote_generator(customer_name, '[{"name":"product","qty":N,"unit_price":P,"discount_pct":D,"total":T}]')
 
-DO NOT generate formatted quotes as text. You MUST use the quote_generator tool to save quotes to files.
+DO NOT generate formatted quotes as text. You MUST use quote_generator. Quotes are saved to an approval queue and require human approval before sending.
 
 Example: For "5 chairs for TestCorp":
 1. price_lookup("Office Chair") 
@@ -437,10 +514,9 @@ def test_quote_generator_directly():
     result = quote_generator("Test Direct Corp", test_items, "Direct test terms")
     print(f"Direct test result: {result}")
     
-    # Check if file was created
-    quote_files = list(OUT_DIR.glob("*.json"))
-    print(f"Files in quotes directory: {[f.name for f in quote_files]}")
-    return len(quote_files) > 0
+    pending_quotes = approval_queue.list_pending()
+    print(f"Pending approvals: {[quote['quote_id'] for quote in pending_quotes]}")
+    return any(quote["quote_id"] == result.get("quote_id") for quote in pending_quotes)
 
 # === Demo ===
 async def main():
@@ -450,7 +526,8 @@ async def main():
     for _, row in df.iterrows():
         print(f"   • {row['name']} (${row['unit_price']}) - {row['tier']}")
     
-    print(f"\n📁 Quotes will be saved to: {OUT_DIR.absolute()}")
+    print(f"\n📁 Pending quotes will be saved to: {APPROVAL_DIR.absolute()}")
+    print(f"📁 Approved quotes will be saved to: {OUT_DIR.absolute()}")
     
     # First test the quote_generator function directly
     direct_test_works = test_quote_generator_directly()
@@ -465,17 +542,10 @@ async def main():
     
     # Check if files were created after each demo
     quote_files = list(OUT_DIR.glob("*.json"))
-    print(f"\n📄 Quote files created so far: {len(quote_files)}")
-    for file in quote_files:
-        print(f"   • {file.name}")
-        # Show first few lines of the file
-        try:
-            with open(file, 'r') as f:
-                content = json.load(f)
-                print(f"     Customer: {content.get('customer', 'N/A')}")
-                print(f"     Items: {len(content.get('items', []))}")
-        except Exception as e:
-            print(f"     Error reading file: {e}")
+    pending_quotes = approval_queue.list_pending()
+    print(f"\n📄 Pending approval files created so far: {len(pending_quotes)}")
+    for quote in pending_quotes:
+        print(f"   • {quote['quote_id']} - {quote.get('customer', 'N/A')}")
     
     print("\n--- Demo 2: Ask for missing info ---")
     await run_agent_async("Need chairs and desks but didn't decide quantities.")
@@ -484,10 +554,10 @@ async def main():
     await run_agent_async("I need 50 Conference Tables for XYZ Ltd, they are a regular customer. Please create a complete quote with discounts.")
     
     # Final check
-    quote_files = list(OUT_DIR.glob("*.json"))
-    print(f"\n📄 Total quote files created: {len(quote_files)}")
-    for file in quote_files:
-        print(f"   • {file.name}")
+    pending_quotes = approval_queue.list_pending()
+    print(f"\n📄 Total pending approval files created: {len(pending_quotes)}")
+    for quote in pending_quotes:
+        print(f"   • {quote['quote_id']}")
 
 if __name__ == "__main__":
     asyncio.run(main())

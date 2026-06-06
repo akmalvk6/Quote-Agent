@@ -16,7 +16,7 @@ import os
 # Import the agent components
 from simple_agent import (
     smart_agent, session_service, runner, APP_NAME, USER_ID, 
-    types, OUT_DIR, PRODUCTS_CSV, HISTORY_CSV
+    types, OUT_DIR, PRODUCTS_CSV, HISTORY_CSV, approval_queue
 )
 
 # Configure Streamlit page
@@ -94,6 +94,31 @@ with st.sidebar:
     quote_files = list(OUT_DIR.glob("*.json"))
     st.metric("Total Quotes", len(quote_files))
     st.metric("Session Quotes", st.session_state.quote_count)
+    st.metric("Pending Approval", len(approval_queue.list_pending()))
+    
+    st.divider()
+
+    # Human approval queue
+    st.subheader("Approval Queue")
+    pending_quotes = approval_queue.list_pending()
+    if pending_quotes:
+        for quote in pending_quotes[:5]:
+            st.write(f"**{quote['quote_id']}** - {quote['customer']}")
+            st.write(f"Total: ${quote['total']:,.2f}")
+            approve_col, reject_col = st.columns(2)
+            with approve_col:
+                if st.button("Approve", key=f"approve_{quote['quote_id']}"):
+                    approval_queue.approve(quote["quote_id"], approver="streamlit_user")
+                    st.success(f"Approved {quote['quote_id']}")
+                    st.rerun()
+            with reject_col:
+                if st.button("Reject", key=f"reject_{quote['quote_id']}"):
+                    approval_queue.reject(quote["quote_id"], reason="Rejected in Streamlit")
+                    st.warning(f"Rejected {quote['quote_id']}")
+                    st.rerun()
+            st.write("---")
+    else:
+        st.write("No pending approvals")
     
     st.divider()
     
