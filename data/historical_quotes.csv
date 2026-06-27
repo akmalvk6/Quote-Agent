@@ -1,0 +1,3 @@
+quote_id,customer,product,qty,unit_price,total,accepted,notes
+Q001,ABC Corp,Office Chair,100,1400,140000,Yes,bulk discount
+Q002,XYZ Ltd,Conference Table,10,11000,110000,No,requested warranty

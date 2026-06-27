@@ -1,0 +1,32 @@
+
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=quote_agent
+      - POSTGRES_USER=quote_agent
+      - POSTGRES_PASSWORD=quote_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    environment:
+      - NODE_ENV=development
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+      - N8N_SECURE_COOKIE=false
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+    volumes:
+      - ./n8n/n8n_data:/home/node/.n8n
+      - ./n8n/local-files:/files
+
+volumes:
+  postgres_data:
